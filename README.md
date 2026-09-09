@@ -89,6 +89,30 @@ resolver, Cargo). Backtracking is simple to reason about and fine for
 small-to-medium dependency graphs; it can blow up combinatorially on
 pathological inputs, which is a known, intentional tradeoff for v1.
 
+## Desktop GUI
+
+A native desktop app is also included, built with **tkinter** (Python
+stdlib — no extra install). It's a second frontend on the exact same
+`resolver` engine the CLI uses.
+
+```bash
+python3 gui/app.py
+```
+
+> tkinter ships with most Python installs (Windows/macOS). On some Linux
+> distros it's a separate package, e.g. `sudo apt install python3-tk`.
+
+Features:
+- Load one of the three bundled examples with one click, or open your own JSON file
+- Edit the scenario directly and hit **Resolve**
+- **Result tab** — resolved versions, or a clear conflict explanation
+- **Dependency Graph tab** — a visual node graph of the resolved packages and
+  their dependency chain, laid out by distance from the root requirements
+  (scrolls horizontally/vertically for larger graphs)
+
+![dep-resolver GUI showing a successful resolution](docs/screenshot-result.png)
+![dep-resolver GUI showing the dependency graph](docs/screenshot-graph.png)
+
 ## Running tests
 
 ```bash
