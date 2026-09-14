@@ -89,6 +89,40 @@ resolver, Cargo). Backtracking is simple to reason about and fine for
 small-to-medium dependency graphs; it can blow up combinatorially on
 pathological inputs, which is a known, intentional tradeoff for v1.
 
+## Resolving real PyPI packages
+
+Beyond synthetic JSON scenarios, `dep-resolver` can fetch real package data
+from PyPI's public JSON API and resolve it with the exact same backtracking
+solver — no separate "real mode" algorithm, just a different data source.
+
+```bash
+python3 resolve.py --from-pypi requests --verbose
+python3 resolve.py --from-pypi requests "urllib3<2.0.0"
+```
+
+The GUI has a matching **🌐 From PyPI…** button — enter one package per line
+(optionally with a constraint like `urllib3<2.0.0`) and it fetches and
+resolves in the background, then shows the result and dependency graph
+exactly like a local scenario.
+
+**Supported constraint syntax** now includes PEP 440's `~=` (compatible
+release) operator in addition to `>=`, `<=`, `==`, `!=`, `>`, `<`:
+`~=1.4.2` means `>=1.4.2, <1.5.0`.
+
+![dep-resolver resolving the real 'requests' package from PyPI](docs/screenshot-pypi.png)
+
+**Known v3 limitations** (by design, not bugs):
+- Only stable releases are considered — pre-releases, dev releases, and
+  post-releases are filtered out.
+- Conditional dependencies (anything gated by an environment marker, e.g.
+  `; extra == "socks"` or `; sys_platform == "win32"`) are skipped entirely
+  rather than guessed at.
+- The crawl is bounded — by default, up to 6 versions per package, 4 levels
+  of transitive depth, and 40 total packages — so resolving a
+  heavily-connected package doesn't turn into a multi-minute fetch. All
+  three limits are configurable via CLI flags (`--max-versions`,
+  `--max-depth`, `--max-packages`) or the GUI dialog.
+
 ## Desktop GUI
 
 A native desktop app is also included, built with **tkinter** (Python
@@ -104,6 +138,7 @@ python3 gui/app.py
 
 Features:
 - Load one of the three bundled examples with one click, or open your own JSON file
+- **🌐 From PyPI…** — resolve real, live packages instead of synthetic data
 - Edit the scenario directly and hit **Resolve**
 - **Result tab** — resolved versions, or a clear conflict explanation
 - **Dependency Graph tab** — a visual node graph of the resolved packages and
@@ -123,9 +158,9 @@ python tests/test_solver.py
 
 ## Roadmap (v2 ideas)
 
-- Real semver ranges (`^1.2.3`, `~1.2.3`) instead of basic comparators
+- Conditional dependency evaluation (environment markers) instead of skipping them
 - Conflict-driven clause learning / SAT-based solving for larger graphs
-- Pull real dependency data from PyPI instead of synthetic JSON
+- Lockfile output (`resolved.lock.json`)
 - Caching / incremental re-resolution when only one constraint changes
 
 ## License

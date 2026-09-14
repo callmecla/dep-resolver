@@ -13,13 +13,15 @@ Run:
 import json
 import os
 import sys
+import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from resolver import Universe, resolve  # noqa: E402
+from resolver.pypi_source import build_universe_from_pypi, PyPIError  # noqa: E402
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
@@ -65,6 +67,10 @@ class ResolverApp(tk.Tk):
 
         tk.Button(bar, text="Open File…", command=self._open_file,
                   bg=PANEL, fg=FG, activebackground=MUTED, relief="flat",
+                  font=("Helvetica", 10), padx=8).pack(side="left", padx=4, pady=8)
+
+        tk.Button(bar, text="🌐 From PyPI…", command=self._open_pypi_dialog,
+                  bg=PANEL, fg=OK, activebackground=MUTED, relief="flat",
                   font=("Helvetica", 10), padx=8).pack(side="left", padx=4, pady=8)
 
         tk.Button(bar, text="▶ Resolve", command=self._on_resolve,
@@ -123,6 +129,12 @@ class ResolverApp(tk.Tk):
 
         body.add(right, minsize=500)
 
+        # Status bar (used for PyPI fetch progress)
+        self.status_var = tk.StringVar(value="")
+        status_bar = tk.Label(self, textvariable=self.status_var, bg=PANEL, fg=MUTED,
+                               anchor="w", font=("Helvetica", 9), padx=10, pady=4)
+        status_bar.pack(side="bottom", fill="x")
+
     # ---------- data loading ----------
 
     def _default_scenario(self):
@@ -152,6 +164,117 @@ class ResolverApp(tk.Tk):
         self.result_text.delete("1.0", "end")
         self.result_text.configure(state="disabled")
         self.graph_canvas.delete("all")
+
+    # ---------- PyPI mode ----------
+
+    def _open_pypi_dialog(self):
+        dialog = tk.Toplevel(self, bg=PANEL)
+        dialog.title("Resolve from PyPI")
+        dialog.geometry("480x360")
+        dialog.configure(bg=PANEL)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="One package per line, e.g.:\n  requests\n  urllib3<2.0.0",
+                 bg=PANEL, fg=MUTED, justify="left", font=("Helvetica", 10)
+                 ).pack(anchor="w", padx=14, pady=(14, 6))
+
+        text = tk.Text(dialog, bg=BG, fg=FG, insertbackground=FG, relief="flat",
+                        font=("Menlo", 11), height=8, padx=8, pady=8)
+        text.insert("1.0", "requests\n")
+        text.pack(fill="both", expand=True, padx=14)
+
+        opts = tk.Frame(dialog, bg=PANEL)
+        opts.pack(fill="x", padx=14, pady=10)
+
+        def labeled_spinbox(parent, label, default, lo=1, hi=100):
+            f = tk.Frame(parent, bg=PANEL)
+            tk.Label(f, text=label, bg=PANEL, fg=MUTED, font=("Helvetica", 9)).pack(side="left")
+            var = tk.IntVar(value=default)
+            tk.Spinbox(f, from_=lo, to=hi, textvariable=var, width=5,
+                       bg=BG, fg=FG, relief="flat").pack(side="left", padx=6)
+            f.pack(side="left", padx=(0, 16))
+            return var
+
+        max_versions_var = labeled_spinbox(opts, "Versions/pkg", 6, 1, 20)
+        max_depth_var = labeled_spinbox(opts, "Max depth", 4, 1, 10)
+        max_packages_var = labeled_spinbox(opts, "Max packages", 40, 1, 200)
+
+        btn_frame = tk.Frame(dialog, bg=PANEL)
+        btn_frame.pack(fill="x", padx=14, pady=(0, 14))
+
+        def on_fetch():
+            raw_lines = [ln.strip() for ln in text.get("1.0", "end").splitlines() if ln.strip()]
+            if not raw_lines:
+                messagebox.showerror("No packages", "Enter at least one package name.")
+                return
+            root_packages = {}
+            for line in raw_lines:
+                matched = False
+                for op in ("==", ">=", "<=", "!=", ">", "<", "~="):
+                    if op in line:
+                        name, constraint = line.split(op, 1)
+                        root_packages[name.strip()] = f"{op}{constraint.strip()}"
+                        matched = True
+                        break
+                if not matched:
+                    root_packages[line] = "*"
+
+            dialog.destroy()
+            self._resolve_from_pypi(
+                root_packages,
+                max_versions_var.get(),
+                max_depth_var.get(),
+                max_packages_var.get(),
+            )
+
+        tk.Button(btn_frame, text="Cancel", command=dialog.destroy,
+                  bg=PANEL, fg=FG, relief="flat", padx=10).pack(side="right", padx=(6, 0))
+        tk.Button(btn_frame, text="Fetch & Resolve", command=on_fetch,
+                  bg=ACCENT, fg="#1e1e2e", relief="flat", font=("Helvetica", 10, "bold"),
+                  padx=10).pack(side="right")
+
+    def _resolve_from_pypi(self, root_packages, max_versions, max_depth, max_packages):
+        self._clear_outputs()
+        self.status_var.set("Starting PyPI fetch…")
+
+        def progress(msg):
+            self.after(0, lambda: self.status_var.set(msg))
+
+        def worker():
+            try:
+                universe = build_universe_from_pypi(
+                    root_packages,
+                    max_versions_per_package=max_versions,
+                    max_packages=max_packages,
+                    max_depth=max_depth,
+                    progress_callback=progress,
+                )
+                result = resolve(universe)
+                self.after(0, lambda: self._on_pypi_done(universe, result, None))
+            except PyPIError as e:
+                self.after(0, lambda: self._on_pypi_done(None, None, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_pypi_done(self, universe, result, error):
+        if error:
+            self.status_var.set(f"PyPI fetch failed: {error}")
+            messagebox.showerror("PyPI fetch failed", error)
+            return
+
+        self.status_var.set(f"Done — {len(universe.packages)} package(s) fetched from PyPI.")
+        # Show the resolved scenario as JSON-ish text for reference (read-only view)
+        self._load_json_text(json.dumps(
+            {name: str(req.constraint) for req in universe.root for name in [req.package]},
+            indent=2,
+        ))
+        self._render_result(result)
+        self.graph_canvas.delete("all")
+        if result.success:
+            self._render_graph(universe, result)
+        else:
+            self._render_no_graph(result)
 
     # ---------- resolve action ----------
 

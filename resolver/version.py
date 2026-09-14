@@ -48,6 +48,21 @@ _OPS = {
 _OP_TOKENS = [">=", "<=", "==", "!=", ">", "<"]
 
 
+def _compatible_release_bounds(version_str: str) -> Tuple[str, str]:
+    """
+    PEP 440 '~=' (compatible release) semantics: '~=X.Y.Z' means
+    '>=X.Y.Z, <X.(Y+1).0' — everything but the last segment stays fixed.
+    '~=X.Y' means '>=X.Y, <(X+1).0'.
+    """
+    parts = [int(p) for p in version_str.split(".")]
+    if len(parts) < 2:
+        raise ValueError(f"'~=' requires at least two version components, got {version_str!r}")
+    upper_parts = parts[:-1]
+    upper_parts[-1] += 1
+    upper = ".".join(str(p) for p in upper_parts)
+    return version_str, upper
+
+
 class Constraint:
     """A single comparator, e.g. '>=1.2.0'."""
 
@@ -75,10 +90,19 @@ class ConstraintSet:
         self.raw = raw.strip()
         if self.raw in ("", "*"):
             self.constraints: List[Constraint] = []  # "*" / empty = any version
-        else:
-            self.constraints = [
-                Constraint(part) for part in self.raw.split(",") if part.strip()
-            ]
+            return
+
+        self.constraints = []
+        for part in self.raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if part.startswith("~="):
+                lower, upper = _compatible_release_bounds(part[2:].strip())
+                self.constraints.append(Constraint(f">={lower}"))
+                self.constraints.append(Constraint(f"<{upper}"))
+            else:
+                self.constraints.append(Constraint(part))
 
     def satisfied_by(self, version: Version) -> bool:
         return all(c.satisfied_by(version) for c in self.constraints)
