@@ -3,13 +3,14 @@ Builds a `Universe` from real PyPI package data, so the exact same
 backtracking solver in `solver.py` can resolve real-world dependencies —
 not just synthetic JSON scenarios.
 
+Dependencies gated by a PEP 508 environment marker (e.g.
+`; sys_platform == "win32"`) are evaluated against a target environment
+(see markers.py) and included only if the marker is satisfied — the same
+behavior `pip` uses during a real install.
+
 Deliberate v3 limitations (documented, not silently wrong):
   - Pre-releases, dev releases, and post-releases are excluded; only plain
     "X.Y.Z"-style stable versions are considered.
-  - Conditional dependencies are skipped entirely: anything gated by an
-    environment marker (`; extra == "..."`, `; sys_platform == "..."`, etc.)
-    is not included, since including it unconditionally would produce an
-    incorrect graph and evaluating markers properly is out of scope for v3.
   - The crawl is bounded (max versions per package, max depth, max total
     packages) so a popular package with a huge transitive tree doesn't
     turn a demo into a multi-minute fetch storm.
@@ -24,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .model import Universe, PackageVersion, Requirement
 from .version import Version, ConstraintSet
+from .markers import MarkerEnvironment, MarkerSyntaxError
 
 PYPI_BASE = "https://pypi.org/pypi"
 
@@ -60,20 +62,19 @@ def _is_stable(version_str: str) -> bool:
     return bool(_STABLE_VERSION_RE.match(version_str))
 
 
-def _parse_requirement(raw: str) -> Optional[Tuple[str, str]]:
-    """Parse one requires_dist entry into (name, constraint_str), or None
-    to skip (unparseable, or gated by an environment marker)."""
+def _parse_requirement(raw: str) -> Optional[Tuple[str, str, Optional[str]]]:
+    """Parse one requires_dist entry into (name, constraint_str, marker_str
+    or None). Returns None only if the line is unparseable."""
     m = _REQ_RE.match(raw)
     if not m:
         return None
     name, spec, marker = m.groups()
-    if marker:
-        return None  # conditional / extras-only dependency — v3 limitation
     name = name.strip()
     spec = (spec or "").strip()
     if spec.startswith("(") and spec.endswith(")"):
         spec = spec[1:-1].strip()
-    return name, spec or "*"
+    marker_str = marker[1:].strip() if marker else None  # strip leading ';'
+    return name, spec or "*", marker_str
 
 
 def fetch_package_versions(name: str, max_versions: int = 6) -> Dict[str, list]:
@@ -102,12 +103,16 @@ def build_universe_from_pypi(
     max_packages: int = 40,
     max_depth: int = 4,
     progress_callback: ProgressCallback = None,
+    environment: Optional[MarkerEnvironment] = None,
 ) -> Universe:
     """
     Crawl PyPI starting from root_packages ({name: constraint_str}) and
     build a Universe. Bounded by max_packages/max_depth so real-world
-    dependency trees stay tractable.
+    dependency trees stay tractable. `environment` controls which
+    environment-marker-gated dependencies get included (defaults to the
+    machine running this code).
     """
+    env = environment or MarkerEnvironment.current()
 
     def report(msg: str):
         if progress_callback:
@@ -144,7 +149,15 @@ def build_universe_from_pypi(
                 parsed = _parse_requirement(raw_req)
                 if not parsed:
                     continue
-                dep_name, dep_constraint = parsed
+                dep_name, dep_constraint, marker_str = parsed
+
+                if marker_str:
+                    try:
+                        if not env.marker_applies(marker_str):
+                            continue  # marker not satisfied — correctly excluded
+                    except MarkerSyntaxError:
+                        continue  # unparseable marker — skip rather than guess
+
                 try:
                     deps.append(Requirement(_normalize(dep_name), ConstraintSet(dep_constraint)))
                 except ValueError:

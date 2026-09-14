@@ -111,17 +111,40 @@ release) operator in addition to `>=`, `<=`, `==`, `!=`, `>`, `<`:
 
 ![dep-resolver resolving the real 'requests' package from PyPI](docs/screenshot-pypi.png)
 
-**Known v3 limitations** (by design, not bugs):
+**Known v4 limitations** (by design, not bugs):
 - Only stable releases are considered — pre-releases, dev releases, and
   post-releases are filtered out.
-- Conditional dependencies (anything gated by an environment marker, e.g.
-  `; extra == "socks"` or `; sys_platform == "win32"`) are skipped entirely
-  rather than guessed at.
+- Extras (`pip install package[extra]`) aren't requestable yet — any
+  dependency gated by `extra == "..."` is excluded, matching a plain
+  `pip install package` with no extras.
 - The crawl is bounded — by default, up to 6 versions per package, 4 levels
   of transitive depth, and 40 total packages — so resolving a
   heavily-connected package doesn't turn into a multi-minute fetch. All
   three limits are configurable via CLI flags (`--max-versions`,
   `--max-depth`, `--max-packages`) or the GUI dialog.
+
+## Environment markers
+
+Real PyPI packages often gate a dependency behind a condition — "only
+install `colorama` on Windows", "only need `filelock`'s newer version on
+Python 3.10+". These are environment markers (PEP 508), and
+`dep-resolver` includes a real parser and evaluator for them in
+`resolver/markers.py`: a tokenizer, recursive-descent parser, and tree
+evaluator supporting `and`/`or`/parentheses, `==`/`!=`/`<`/`<=`/`>`/`>=`,
+and `in`/`not in` — no `eval()` involved.
+
+By default, markers are evaluated against **the machine actually running
+the resolver** (Python version, OS, platform) — the same way `pip` behaves
+during a real install.
+
+```python
+from resolver.markers import MarkerEnvironment
+
+env = MarkerEnvironment.current()
+env.marker_applies('sys_platform == "win32"')           # depends on your OS
+env.marker_applies('python_version >= "3.8"')            # numeric comparison
+env.marker_applies('sys_platform == "win32" or sys_platform == "linux"')
+```
 
 ## Desktop GUI
 
@@ -156,9 +179,9 @@ python -m pytest tests/
 python tests/test_solver.py
 ```
 
-## Roadmap (v2 ideas)
+## Roadmap (future ideas)
 
-- Conditional dependency evaluation (environment markers) instead of skipping them
+- Support requesting extras explicitly (`--from-pypi "requests[socks]"`)
 - Conflict-driven clause learning / SAT-based solving for larger graphs
 - Lockfile output (`resolved.lock.json`)
 - Caching / incremental re-resolution when only one constraint changes
