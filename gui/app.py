@@ -27,57 +27,91 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 BG = "#1e1e2e"
 PANEL = "#282a3a"
+PANEL_HOVER = "#33364a"
 FG = "#e4e4e8"
 ACCENT = "#7aa2f7"
+ACCENT_HOVER = "#5b84d6"
 OK = "#9ece6a"
 BAD = "#f7768e"
 MUTED = "#565f89"
+BORDER = "#3a3d52"
+
+REPO_URL = "https://github.com/callmecla/dep-resolver"
+
+
+def _styled_button(parent, text, command, bg=PANEL, hover_bg=PANEL_HOVER, fg=FG,
+                    font=("Helvetica", 10), bold=False, padx=10):
+    """A flat button with real mouse-over feedback (plain tk.Button doesn't
+    show hover state with relief='flat' + custom colors by default)."""
+    btn = tk.Button(
+        parent, text=text, command=command, bg=bg, fg=fg,
+        activebackground=hover_bg, activeforeground=fg, relief="flat",
+        font=(font[0], font[1], "bold") if bold else font,
+        padx=padx, pady=4, cursor="hand2", borderwidth=0,
+    )
+    btn.bind("<Enter>", lambda e: btn.configure(bg=hover_bg))
+    btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
+    return btn
 
 
 class ResolverApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("dep-resolver — dependency version resolver")
-        self.geometry("1150x700")
+        self.geometry("1150x720")
         self.configure(bg=BG)
+        self._last_loaded_text = ""
 
         self._build_toolbar()
         self._build_body()
+        self._build_footer()
 
         self._load_json_text(self._default_scenario())
 
     # ---------- UI construction ----------
 
     def _build_toolbar(self):
-        bar = tk.Frame(self, bg=PANEL, height=48)
+        bar = tk.Frame(self, bg=PANEL, height=52)
         bar.pack(side="top", fill="x")
 
         tk.Label(bar, text="dep-resolver", bg=PANEL, fg=ACCENT,
-                 font=("Helvetica", 13, "bold")).pack(side="left", padx=12, pady=8)
+                 font=("Helvetica", 13, "bold")).pack(side="left", padx=(14, 10), pady=10)
+
+        tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", pady=10, padx=(0, 8))
 
         for label, fname in [
             ("Simple OK", "simple_ok.json"),
             ("Simple Conflict", "simple_conflict.json"),
             ("Deep Chain", "deep_chain_backtrack.json"),
         ]:
-            b = tk.Button(bar, text=label, command=lambda f=fname: self._load_example(f),
-                           bg=PANEL, fg=FG, activebackground=MUTED, relief="flat",
-                           font=("Helvetica", 10), padx=8)
-            b.pack(side="left", padx=4, pady=8)
+            _styled_button(bar, label, lambda f=fname: self._load_example(f)
+                            ).pack(side="left", padx=3, pady=9)
 
-        tk.Button(bar, text="Open File…", command=self._open_file,
-                  bg=PANEL, fg=FG, activebackground=MUTED, relief="flat",
-                  font=("Helvetica", 10), padx=8).pack(side="left", padx=4, pady=8)
+        tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", pady=10, padx=8)
 
-        tk.Button(bar, text="🌐 From PyPI…", command=self._open_pypi_dialog,
-                  bg=PANEL, fg=OK, activebackground=MUTED, relief="flat",
-                  font=("Helvetica", 10), padx=8).pack(side="left", padx=4, pady=8)
+        _styled_button(bar, "Open File…", self._open_file).pack(side="left", padx=3, pady=9)
+        _styled_button(bar, "🌐 From PyPI…", self._open_pypi_dialog, fg=OK
+                        ).pack(side="left", padx=3, pady=9)
+        _styled_button(bar, "↺ Reset", self._on_reset).pack(side="left", padx=3, pady=9)
 
-        tk.Button(bar, text="▶ Resolve", command=self._on_resolve,
-                  bg=ACCENT, fg="#1e1e2e", activebackground="#5b84d6", relief="flat",
-                  font=("Helvetica", 10, "bold"), padx=12).pack(side="right", padx=12, pady=8)
+        _styled_button(bar, "▶ Resolve", self._on_resolve, bg=ACCENT, hover_bg=ACCENT_HOVER,
+                        fg="#1e1e2e", bold=True, padx=14).pack(side="right", padx=14, pady=9)
+
+    def _build_footer(self):
+        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
+        footer = tk.Frame(self, bg=PANEL)
+        footer.pack(side="bottom", fill="x")
+
+        self.status_var = tk.StringVar(value="")
+        tk.Label(footer, textvariable=self.status_var, bg=PANEL, fg=MUTED,
+                 anchor="w", font=("Helvetica", 9), padx=12, pady=6).pack(side="left")
+
+        tk.Label(footer, text=f"dep-resolver · {REPO_URL.replace('https://', '')}",
+                 bg=PANEL, fg=MUTED, anchor="e", font=("Helvetica", 9), padx=12, pady=6
+                 ).pack(side="right")
 
     def _build_body(self):
+        tk.Frame(self, bg=BORDER, height=1).pack(side="top", fill="x")
         body = tk.PanedWindow(self, orient="horizontal", bg=BG, sashwidth=6,
                                sashrelief="flat")
         body.pack(fill="both", expand=True)
@@ -129,21 +163,25 @@ class ResolverApp(tk.Tk):
 
         body.add(right, minsize=500)
 
-        # Status bar (used for PyPI fetch progress)
-        self.status_var = tk.StringVar(value="")
-        status_bar = tk.Label(self, textvariable=self.status_var, bg=PANEL, fg=MUTED,
-                               anchor="w", font=("Helvetica", 9), padx=10, pady=4)
-        status_bar.pack(side="bottom", fill="x")
-
     # ---------- data loading ----------
 
     def _default_scenario(self):
         with open(os.path.join(EXAMPLES_DIR, "simple_ok.json")) as f:
             return f.read()
 
-    def _load_json_text(self, text):
+    def _load_json_text(self, text, remember=True):
         self.json_text.delete("1.0", "end")
         self.json_text.insert("1.0", text)
+        if remember:
+            self._last_loaded_text = text
+
+    def _on_reset(self):
+        """Restore whatever was last officially loaded (a bundled example,
+        an opened file, or the PyPI-derived scenario) — undoes accidental
+        edits or an emptied textbox without needing to re-find the right
+        example button."""
+        self._load_json_text(self._last_loaded_text, remember=False)
+        self.status_var.set("Scenario restored.")
 
     def _load_example(self, filename):
         path = os.path.join(EXAMPLES_DIR, filename)
@@ -228,11 +266,10 @@ class ResolverApp(tk.Tk):
                 max_packages_var.get(),
             )
 
-        tk.Button(btn_frame, text="Cancel", command=dialog.destroy,
-                  bg=PANEL, fg=FG, relief="flat", padx=10).pack(side="right", padx=(6, 0))
-        tk.Button(btn_frame, text="Fetch & Resolve", command=on_fetch,
-                  bg=ACCENT, fg="#1e1e2e", relief="flat", font=("Helvetica", 10, "bold"),
-                  padx=10).pack(side="right")
+        _styled_button(btn_frame, "Cancel", dialog.destroy, bg=PANEL, hover_bg=PANEL_HOVER
+                        ).pack(side="right", padx=(6, 0))
+        _styled_button(btn_frame, "Fetch & Resolve", on_fetch, bg=ACCENT, hover_bg=ACCENT_HOVER,
+                        fg="#1e1e2e", bold=True).pack(side="right")
 
     def _resolve_from_pypi(self, root_packages, max_versions, max_depth, max_packages):
         self._clear_outputs()
